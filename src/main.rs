@@ -752,11 +752,13 @@ mod capi;
         }
 
         replacements.sort_by_key(|a| a.byte_start);
-        for i in 0..(replacements.len() - 1) {
-          let this = &replacements[i];
-          let next = &replacements[i + 1];
-          if this.byte_end > next.byte_start {
-            unimplemented!();
+        if replacements.len() >= 1 {
+          for i in 0..(replacements.len() - 1) {
+            let this = &replacements[i];
+            let next = &replacements[i + 1];
+            if this.byte_end > next.byte_start {
+              unimplemented!();
+            }
           }
         }
 
