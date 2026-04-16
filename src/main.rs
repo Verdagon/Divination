@@ -140,6 +140,24 @@ fn main() -> Result<(), anyhow::Error> {
     return Err(anyhow::Error::new(std::io::Error::new(std::io::ErrorKind::Other, format!("No stdout from command: {} {}", command, args.join(" ")))));
   }
 
+  // Detect the host target triple (e.g. aarch64-apple-darwin, x86_64-apple-darwin) from
+  // `rustc -vV`. Previously hardcoded to aarch64-apple-darwin, which broke x86_64 Macs
+  // and Linux. cbuild uses this triple and the Coordinator reads it back from the target
+  // directory structure to pick the right clang -arch.
+  let rustc_vv_output =
+      Command::new(&rustc_path).args(["-vV"]).output()
+          .with_context(|| format!("Failed to run {} -vV", &rustc_path))?;
+  if !rustc_vv_output.status.success() {
+    return Err(anyhow::Error::new(std::io::Error::new(std::io::ErrorKind::Other,
+        String::from_utf8_lossy(&rustc_vv_output.stderr).to_string())));
+  }
+  let rustc_vv_str = String::from_utf8_lossy(&rustc_vv_output.stdout);
+  let host_triple: String = rustc_vv_str.lines()
+      .find_map(|line| line.strip_prefix("host: "))
+      .ok_or_else(|| anyhow::Error::new(std::io::Error::new(std::io::ErrorKind::Other,
+          format!("rustc -vV output missing `host:` line:\n{}", rustc_vv_str))))?
+      .trim().to_string();
+
   let output_dir_path = root_matches.get_one::<String>("output_dir").unwrap();
   let maybe_output_sizes_path = root_matches.get_one::<String>("output_sizes");
 
@@ -669,16 +687,18 @@ mod capi;
           .with_context(|| "Failed to remove ".to_string() + output_dir_path + "/src/main.rs")?;
 
       let args_human_output: Vec<String> = vec![
-        "+nightly",
-        "cbuild",
-        "--release",
-        &("--manifest-path=".to_string() + output_dir_path + "/Cargo.toml"),
-        "--destdir=clibthing",
-        "--target", "aarch64-apple-darwin",
-        "-Z", "build-std-features=panic_immediate_abort",
-        "-Z", "build-std=std,panic_abort",
-        "--library-type", "staticlib"
-      ].into_iter().map(|x| x.to_owned()).collect::<Vec<String>>();
+        "+nightly".to_owned(),
+        "cbuild".to_owned(),
+        "--release".to_owned(),
+        "--manifest-path=".to_string() + output_dir_path + "/Cargo.toml",
+        "--destdir=clibthing".to_owned(),
+        "--target".to_owned(), host_triple.clone(),
+        // Removed: "-Z", "build-std-features=panic_immediate_abort" — this was renamed
+        // in rust nightly 2025-12. The panic=abort in the generated Cargo.toml profile
+        // achieves normal panic-abort behavior; panic_immediate_abort was a size optimization.
+        "-Z".to_owned(), "build-std=std,panic_abort".to_owned(),
+        "--library-type".to_owned(), "staticlib".to_owned()
+      ];
 
       let mut args_json_output = args_human_output.clone();
       args_json_output.push("--message-format=json".to_owned());
